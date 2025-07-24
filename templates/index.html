@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Restaurant Recommender</title>
+    <!-- Include Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5;
+        }
+        .container {
+            max-width: 900px;
+        }
+        .recommendation-card {
+            background-color: #ffffff;
+            border-radius: 0.75rem; /* rounded-xl */
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* shadow-md */
+            padding: 1.5rem; /* p-6 */
+            margin-bottom: 1.5rem; /* mb-6 */
+        }
+        .btn-primary {
+            background-color: #4f46e5; /* indigo-600 */
+            color: white;
+            padding: 0.75rem 1.5rem; /* py-3 px-6 */
+            border-radius: 0.5rem; /* rounded-lg */
+            font-weight: 600; /* font-semibold */
+            transition: background-color 0.3s ease;
+        }
+        .btn-primary:hover {
+            background-color: #4338ca; /* indigo-700 */
+        }
+        .input-textarea, .input-text { /* Added input-text style */
+            border: 1px solid #d1d5db; /* border-gray-300 */
+            border-radius: 0.5rem; /* rounded-lg */
+            padding: 0.75rem; /* p-3 */
+            width: 100%;
+        }
+        .input-textarea {
+            resize: vertical; /* Allow vertical resizing */
+        }
+        .restaurant-name-link { /* Style for the clickable restaurant name */
+            color: #4f46e5; /* indigo-600 */
+            text-decoration: none;
+            cursor: pointer;
+            transition: color 0.3s ease;
+        }
+        .restaurant-name-link:hover {
+            color: #4338ca; /* indigo-700 */
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center py-10">
+    <div class="container bg-white p-8 rounded-xl shadow-lg">
+        <h1 class="text-4xl font-bold text-center text-indigo-700 mb-8">AI Restaurant Recommender</h1>
+
+        <div class="mb-8 p-6 bg-indigo-50 rounded-lg border border-indigo-200">
+            <p class="text-lg text-indigo-800 font-semibold mb-3">Please tell me your preferences in English only, for example:</p>
+            <ul class="list-disc list-inside text-indigo-700 text-sm space-y-1">
+                <li>"I want Italian food tonight, looking for a quiet cafe with good service."</li>
+                <li>"I'm feeling down, want a lively bar to relax, preferably in Digbeth."</li>
+                <li>"Any recommendations for a Chinese restaurant with good value?"</li>
+                <li>"I need a restaurant with vegan options and a cozy atmosphere, near the university."</li>
+                <li>"Find me a cafe near Birmingham New Street Station within 500 meters."</li>
+                <li>"Show me bars in Selly Oak, within 1km, with a lively atmosphere."</li>
+            </ul>
+        </div>
+
+        <form action="/" method="post" class="mb-8">
+            <div class="mb-4">
+                <label for="user_thought" class="block text-gray-700 text-lg font-semibold mb-2">Your thoughts (e.g., food type, mood, priority):</label>
+                <textarea id="user_thought" name="user_thought" rows="3" class="input-textarea" placeholder="Enter your needs and mood here...">{{ user_thought }}</textarea>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                    <label for="user_location_input" class="block text-gray-700 text-lg font-semibold mb-2">Your location (e.g., "Birmingham City Centre", "B1 1BB"):</label>
+                    <input type="text" id="user_location_input" name="user_location_input" class="input-text" placeholder="Enter a location" value="{{ user_location_input }}">
+                </div>
+                <div>
+                    <label for="user_radius_input" class="block text-gray-700 text-lg font-semibold mb-2">Search radius (in meters, e.g., 500, 1000):</label>
+                    <input type="number" id="user_radius_input" name="user_radius_input" class="input-text" placeholder="Enter radius" value="{{ user_radius_input }}">
+                </div>
+            </div>
+
+            <div class="text-center">
+                <button type="submit" class="btn-primary">Get Recommendations</button>
+            </div>
+        </form>
+
+        {% if error_message %}
+            <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg relative mb-6" role="alert">
+                <strong class="font-bold">Error!</strong>
+                <span class="block sm:inline">{{ error_message }}</span>
+            </div>
+        {% endif %}
+
+        {% if recommendations is not none and not recommendations.empty %}
+            <h2 class="text-3xl font-bold text-center text-gray-800 mb-6">Recommendation Results</h2>
+            {% for index, reco in recommendations.iterrows() %}
+                <div class="recommendation-card">
+                    <h3 class="text-2xl font-bold text-indigo-600 mb-2">
+                        {# Construct Google Maps URL using place_id and restaurant_name #}
+                        <a href="https://www.google.com/maps/search/?api=1&query={{ reco.restaurant_name | urlencode }}&query_place_id={{ reco.place_id }}"
+                           target="_blank" class="restaurant-name-link">
+                            {{ reco.restaurant_name }}
+                        </a>
+                    </h3>
+                    <p class="text-gray-700 mb-1"><strong>Address:</strong> {{ reco.address }}</p>
+                    <p class="text-gray-700 mb-1"><strong>Average Rating:</strong> {{ "%.1f" | format(reco.avg_rating) }} / 5.0 ({{ reco.total_ratings | int }} total ratings)</p>
+                    <p class="text-gray-700 mb-1"><strong>Weighted Rating:</strong> {{ "%.2f" | format(reco.weighted_rating) }} / 5.0</p>
+                    <p class="text-gray-700 mb-1"><strong>Average Sentiment Score:</strong> {{ "%.2f" | format(reco.avg_sentiment_compound) }}</p>
+                    <p class="text-gray-700 mb-1"><strong>Food Type:</strong>
+                        {% if reco.food_type_tags %}
+                            {{ reco.food_type_tags | join(', ') }}
+                        {% else %}
+                            N/A
+                        {% endif %}
+                    </p>
+                    <p class="text-gray-700 mb-1"><strong>Key Aspects:</strong>
+                        {% if reco.priority_tags %}
+                            {{ reco.priority_tags | join(', ') }}
+                            {% else %}
+                            N/A
+                        {% endif %}
+                    </p>
+                    <p class="text-gray-700 mb-1"><strong>Recommendation Score:</strong> {{ "%.2f" | format(reco.recommendation_score) }}</p>
+                    {% if 'distance_m' in reco and reco.distance_m is not none %}
+                        <p class="text-gray-700 mb-1"><strong>Distance:</strong> {{ "%.0f" | format(reco.distance_m) }} meters</p>
+                    {% endif %}
+                    <div class="text-gray-700 mb-1">
+                        <strong>Opening Hours:</strong>
+                        {% if reco.opening_hours and reco.opening_hours != 'N/A' %}
+                            <ul class="list-disc list-inside ml-4">
+                                {% for hour_entry in reco.opening_hours %}
+                                    <li>{{ hour_entry }}</li>
+                                {% endfor %}
+                            {% else %}
+                                <span class="ml-4">N/A</span>
+                            {% endif %}
+                            </ul>
+                    </div>
+                </div>
+            {% endfor %}
+        {% elif recommendations is not none and recommendations.empty %}
+            <h2 class="text-3xl font-bold text-center text-gray-800 mb-6">Recommendation Results</h2>
+            <p class="text-center text-gray-600 text-lg">Sorry, no restaurants matching all your preferences were found.</p>
+            <p class="text-center text-gray-600 text-lg">Please try broadening your input or changing keywords.</p>
+        {% endif %}
+    </div>
+</body>
+</html>
