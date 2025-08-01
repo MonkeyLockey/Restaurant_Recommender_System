@@ -9,14 +9,16 @@ import math
 # --- Google Maps API Key ---
 # IMPORTANT: Replace with your actual Google Maps API Key!
 GMAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
-# ---------------------------
+# ---------------------------\
 
 # Initialize Google Maps client
 gmaps_client = googlemaps.Client(key=GMAPS_API_KEY)
 
 # --- Configuration for Recommendation Logic ---
-# Minimum number of *overall Google ratings* a restaurant must have to be considered for recommendation
-MIN_RATINGS_THRESHOLD = 30
+# 如果使用者沒有在文字中指定，則使用這些預設值
+DEFAULT_MIN_REVIEWS = 10
+DEFAULT_MIN_RATING = 3.5
+
 # Parameters for Bayesian Average (Weighted Rating)
 # C = Overall average rating across ALL restaurants (will be calculated dynamically)
 # M_BAYESIAN_AVG_CONFIDENCE: Minimum number of *overall Google ratings* for a restaurant's avg_rating
@@ -37,382 +39,236 @@ def load_processed_data(filename):
         pd.DataFrame: Loaded data.
     """
     if not os.path.exists(filename):
-        print(f"Error: File '{filename}' not found. Please check the file path and name.")
+        print(f"Error: Processed data file not found at {filename}. Please run data_processor.py first.")
         return pd.DataFrame()
+
+    df = pd.read_csv(filename)
+
+    # Check if necessary columns exist and handle missing columns
+    for col in ['food_type_tags', 'priority_tags', 'opening_hours', 'avg_rating', 'total_ratings']:
+        if col not in df.columns:
+            print(f"Warning: Column '{col}' not found in the CSV. Adding an empty column.")
+            df[col] = '[]' if col in ['food_type_tags', 'priority_tags'] else 'N/A'
+
+    # --- FIX: Deserialize JSON strings back to Python lists ---
+    # The data_processor.py serializes these as strings, so we need to parse them back.
+    def parse_json_column(json_string):
+        try:
+            return json.loads(json_string) if isinstance(json_string, str) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    df['food_type_tags'] = df['food_type_tags'].apply(parse_json_column)
+    df['priority_tags'] = df['priority_tags'].apply(parse_json_column)
+
+    # Handle opening_hours, which might be a list of strings or a single string
+    df['opening_hours'] = df['opening_hours'].apply(
+        lambda x: json.loads(x) if isinstance(x, str) and x.startswith('[') else [x] if isinstance(x,
+                                                                                                   str) and x != 'N/A' else []
+    )
+
+    print(f"Loaded {len(df)} restaurants from {filename}.")
+    print("\nLoaded data preview:")
+    print(df[['restaurant_name', 'food_type_tags', 'priority_tags', 'avg_rating']].head())
+
+    return df
+
+
+# Initialize the Flask app
+app = Flask(__name__)
+restaurant_data_df = load_processed_data("birmingham_restaurants_20250725_000229_processed.csv")
+
+# Calculate global mean rating C for Bayesian average, if data is available
+C = restaurant_data_df['avg_rating'].mean() if not restaurant_data_df.empty else 0.0
+
+
+# Function to calculate the weighted rating based on the Bayesian average formula
+def weighted_rating(row, m=M_BAYESIAN_AVG_CONFIDENCE, c=C):
+    v = row['total_ratings']
+    R = row['avg_rating']
+    # Formula: (v / (v + m) * R) + (m / (v + m) * C)
+    return (v / (v + m) * R) + (m / (v + m) * c)
+
+
+# Function to get coordinates from a location string
+def geocode_location(location_name):
     try:
-        df = pd.read_csv(filename, encoding='utf-8-sig', engine='python')
-
-        def parse_json_list(s):
-            # Returns an empty list if the value is NaN or an empty string
-            if pd.isna(s) or s == '':
-                return []
-            try:
-                # Attempt to parse the JSON string
-                return json.loads(s)
-            except json.JSONDecodeError as e:
-                # Print a warning and return an empty list if parsing fails
-                print(f"Warning: JSON parsing error '{e}'. Original string: '{s}'. Returning empty list.")
-                return []
-            except Exception as e:
-                # Catch other unknown errors
-                print(f"Warning: Unknown error '{e}' parsing string: '{s}'. Returning empty list.")
-                return []
-
-        # Convert stored JSON strings back to Python lists
-        df['food_type_tags'] = df['food_type_tags'].apply(parse_json_list)
-        df['priority_tags'] = df['priority_tags'].apply(parse_json_list)
-        df['opening_hours'] = df['opening_hours'].apply(parse_json_list)
-
-        # --- Enhanced type handling for numerical and text columns ---
-        # Ensure all numerical columns are float type and fill NaNs
-        df['avg_rating'] = pd.to_numeric(df['avg_rating'], errors='coerce').fillna(0.0).astype(float)
-        df['avg_sentiment_compound'] = pd.to_numeric(df['avg_sentiment_compound'], errors='coerce').fillna(0.0).astype(
-            float)
-        df['positive_ratio'] = pd.to_numeric(df['positive_ratio'], errors='coerce').fillna(0.0).astype(float)
-        df['negative_ratio'] = pd.to_numeric(df['negative_ratio'], errors='coerce').fillna(0.0).astype(float)
-
-        # Ensure total_ratings is int and fill NaNs
-        df['total_ratings'] = pd.to_numeric(df['total_ratings'], errors='coerce').fillna(0).astype(int)
-        # total_reviews is the count of scraped reviews, which is max 5. Ensure it's int.
-        df['total_reviews'] = pd.to_numeric(df['total_reviews'], errors='coerce').fillna(0).astype(int)
-
-        # Ensure all_review_texts is always a string, fill NaNs
-        df['all_review_texts'] = df['all_review_texts'].astype(str).fillna('')
-
-        # Ensure latitude and longitude are float type, fill NaNs
-        df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce').fillna(0.0).astype(float)
-        df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce').fillna(0.0).astype(float)
-        # -----------------------------------------------------------
-
-        print(f"Successfully loaded {len(df)} restaurant data entries for recommendation.")
-        return df
+        geocode_result = gmaps_client.geocode(location_name)
+        if geocode_result:
+            lat = geocode_result[0]['geometry']['location']['lat']
+            lng = geocode_result[0]['geometry']['location']['lon']
+            return lat, lng
+        return None, None
     except Exception as e:
-        print(f"Error loading processed CSV file: {e}")
-        print("Please check file encoding or content format.")
-        return pd.DataFrame()
+        print(f"Error during geocoding: {e}")
+        return None, None
 
 
-# Haversine distance function
-def haversine_distance(lat1, lon1, lat2, lon2):
-    R = 6371000  # Radius of Earth in meters
+def calculate_distance(lat1, lon1, lat2, lon2):
+    R = 6371000  # radius of Earth in meters
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
     delta_phi = math.radians(lat2 - lat1)
     delta_lambda = math.radians(lon2 - lon1)
 
-    a = math.sin(delta_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2
+    a = math.sin(delta_phi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c  # Distance in meters
+
+    distance = R * c  # in meters
+    return distance
 
 
-# Recommendation algorithm
-def recommend_restaurants(restaurant_df, user_preferences, top_n=5, user_lat=None, user_lng=None, search_radius_m=None):
+def parse_user_filters(user_thought):
     """
-    Recommends restaurants based on user preferences.
-    Args:
-        restaurant_df (pd.DataFrame): DataFrame containing aggregated restaurant data.
-        user_preferences (dict): Dictionary containing user preferences.
-        top_n (int): Number of top recommendations to return.
-        user_lat (float): Latitude of the user's location.
-        user_lng (float): Longitude of the user's location.
-        search_radius_m (int): Search radius in meters.
-    Returns:
-        pd.DataFrame: List of recommended restaurants.
+    從使用者輸入的文字中解析出最低評分和最低評論數，並回傳一個清理後的字串。
     """
-    filtered_df = restaurant_df.copy()
+    text_lower = user_thought.lower()
+    min_rating = DEFAULT_MIN_RATING
+    min_reviews = DEFAULT_MIN_REVIEWS
 
-    # --- Initial Filter: Minimum Overall Ratings Threshold ---
-    # Only consider restaurants with enough overall Google ratings
-    filtered_df = filtered_df[filtered_df['total_ratings'] >= MIN_RATINGS_THRESHOLD].reset_index(drop=True)
-    if filtered_df.empty:
-        print(
-            f"No restaurants found with at least {MIN_RATINGS_THRESHOLD} overall Google ratings after initial filter.")
-        return pd.DataFrame()
+    # 尋找並移除 "over X stars" 或 "rating Y"
+    rating_patterns = r'(over\s*(\d\.?\d*)\s*stars?)|(rating\s*(\d\.?\d*))'
+    rating_match = re.search(rating_patterns, text_lower)
+    if rating_match:
+        # 獲取第一個匹配到的群組
+        rating_value = rating_match.group(2) or rating_match.group(4)
+        try:
+            min_rating = float(rating_value)
+        except (ValueError, TypeError):
+            pass  # 如果轉換失敗，使用預設值
+        text_lower = re.sub(rating_patterns, '', text_lower).strip()
 
-    # --- 1. Filtering Phase ---
-    # Filter by food type
-    if user_preferences['food_preference']:
-        food_pref_lower = user_preferences['food_preference'].lower()
-        filtered_df = filtered_df[
-            filtered_df['food_type_tags'].apply(
-                lambda tags: any(food_pref_lower in tag.lower() for tag in tags if isinstance(tag, str)))
-        ].reset_index(drop=True)
+    # 尋找並移除 "over X reviews" 或 "at least Y reviews"
+    reviews_patterns = r'(over\s*(\d+)\s*reviews?)|(at\s*least\s*(\d+)\s*reviews?)'
+    reviews_match = re.search(reviews_patterns, text_lower)
+    if reviews_match:
+        reviews_value = reviews_match.group(2) or reviews_match.group(4)
+        try:
+            min_reviews = int(reviews_value)
+        except (ValueError, TypeError):
+            pass
+        text_lower = re.sub(reviews_patterns, '', text_lower).strip()
 
-        # Filter by location (text match in address) - This is for the conversational input
-    if user_preferences['location']:
-        location_lower = user_preferences['location'].lower()
-        filtered_df = filtered_df[
-            filtered_df['address'].str.contains(location_lower, case=False, na=False)
-        ].reset_index(drop=True)
-
-        # Filter by user's precise location and radius
-    if user_lat is not None and user_lng is not None and search_radius_m is not None:
-        # Calculate distance for each restaurant
-        filtered_df['distance_m'] = filtered_df.apply(
-            lambda row: haversine_distance(user_lat, user_lng, row['latitude'], row['longitude']),
-            axis=1
-        )
-        # Filter by radius
-        filtered_df = filtered_df[filtered_df['distance_m'] <= search_radius_m].reset_index(drop=True)
-
-    # If DataFrame is empty after all filtering, return an empty DataFrame immediately
-    if filtered_df.empty:
-        return pd.DataFrame()
-
-    # --- 2. Scoring Phase ---
-    if not filtered_df.empty:
-        filtered_df['recommendation_score'] = 0.0
-
-        # Calculate C (overall average rating) dynamically from the *original* full dataset
-        # This ensures C is representative of all available data, not just the filtered subset.
-        C_overall_avg_rating = restaurant_df['avg_rating'].mean()
-        print(f"Overall average rating (C): {C_overall_avg_rating:.2f}")
-
-        # Calculate Weighted Rating (Bayesian Average) using total_ratings for confidence (v)
-        # WR = (R * v + C * m) / (v + m)
-        # R = avg_rating, v = total_ratings, C = C_overall_avg_rating, m = M_BAYESIAN_AVG_CONFIDENCE
-        filtered_df['weighted_rating'] = filtered_df.apply(
-            lambda row: (row['avg_rating'] * row['total_ratings'] + C_overall_avg_rating * M_BAYESIAN_AVG_CONFIDENCE) / \
-                        (row['total_ratings'] + M_BAYESIAN_AVG_CONFIDENCE) if (row[
-                                                                                   'total_ratings'] + M_BAYESIAN_AVG_CONFIDENCE) > 0 else C_overall_avg_rating,
-            axis=1
-        )
-
-        # Base score: Use normalized Weighted Rating and normalized Sentiment Score
-        filtered_df['normalized_weighted_rating'] = filtered_df['weighted_rating'].astype(
-            float) / 5.0  # Normalize WR to 0-1
-        filtered_df['normalized_sentiment'] = (filtered_df['avg_sentiment_compound'].astype(float) + 1) / 2.0
-
-        # Adjust weights as needed. Weighted Rating now replaces simple normalized_rating.
-        filtered_df['recommendation_score'] += filtered_df[
-                                                   'normalized_weighted_rating'] * 0.6  # Give more weight to weighted rating
-        filtered_df['recommendation_score'] += filtered_df['normalized_sentiment'] * 0.4
-
-        # Bonus points: mood/atmosphere matching (based on keywords in review text and sentiment)
-        if user_preferences['mood']:
-            mood_lower = user_preferences['mood'].lower()
-            mood_keywords = {
-                'quiet': ['quiet', 'peaceful', 'calm', 'relaxing'],
-                'lively': ['lively', 'noisy', 'busy', 'energetic', 'vibrant'],
-                'romantic': ['romantic', 'intimate', 'date night'],
-                'cozy': ['cozy', 'warm', 'comfortable', 'homely']
-            }
-
-            if mood_lower in mood_keywords:
-                for keyword in mood_keywords[mood_lower]:
-                    contains_keyword_int = filtered_df['all_review_texts'].str.contains(keyword, case=False,
-                                                                                        na=False).astype(int)
-                    positive_ratio_float = filtered_df['positive_ratio'].astype(float)
-                    filtered_df['recommendation_score'] += (
-                            contains_keyword_int * positive_ratio_float * 0.1
-                    )
-
-        # Bonus points: priority matching (based on priority_tags and sentiment)
-        if user_preferences['priority']:
-            priority_lower = user_preferences['priority'].lower()
-            has_priority_tag_int = filtered_df['priority_tags'].apply(
-                lambda tags: any(priority_lower in tag.lower() for tag in tags if isinstance(tag, str))).astype(int)
-            positive_ratio_float = filtered_df['positive_ratio'].astype(float)
-            filtered_df['recommendation_score'] += (
-                    has_priority_tag_int * positive_ratio_float * 0.2
-            )
-    else:
-        return pd.DataFrame()
-
-    # --- 3. Sorting and returning Top N ---
-    filtered_df['recommendation_score'] = pd.to_numeric(filtered_df['recommendation_score'], errors='coerce').fillna(
-        0.0)
-    recommended_df = filtered_df.sort_values(by='recommendation_score', ascending=False).head(top_n)
-
-    # Select columns to return, including distance_m, weighted_rating, and place_id
-    cols_to_return = [
-        'restaurant_name', 'address', 'avg_rating', 'total_ratings',
-        'weighted_rating',
-        'avg_sentiment_compound',
-        'food_type_tags', 'priority_tags', 'recommendation_score', 'opening_hours',
-        'place_id'  # 新增: 包含 place_id
-    ]
-    if 'distance_m' in recommended_df.columns:
-        cols_to_return.append('distance_m')
-
-    return recommended_df[cols_to_return]
+    print(f"Parsed filters: min_rating={min_rating}, min_reviews={min_reviews}")
+    print(f"Cleaned user thought: '{text_lower}'")
+    return min_rating, min_reviews, text_lower
 
 
-# --- Function to parse conversational user input ---
-def parse_conversational_input(user_thought):
-    """
-    Parses conversational user input to extract food preference, mood, priority, and location.
-    This is a simplified version based on rules and keyword matching.
-    Note: This function is currently primarily designed to parse English keywords.
-    """
-    preferences = {
-        'food_preference': None,
-        'mood': None,
-        'priority': None,
-        'location': None
-    }
-    user_thought_lower = user_thought.lower()
+def get_recommendations_with_keywords(user_thought_cleaned, min_rating, min_reviews, user_lat=None, user_lng=None,
+                                      radius=None):
+    if restaurant_data_df.empty:
+        return pd.DataFrame(), "餐廳資料載入失敗，請檢查資料檔案。"
 
-    # Food type keywords (consistent with or extended from data_processor.py's food_keywords)
-    food_type_map = {
-        'italian': ['italian', 'pasta', 'pizza'],
-        'chinese': ['chinese', 'noodles', 'dumplings'],
-        'indian': ['indian', 'curry', 'naan'],
-        'japanese': ['japanese', 'sushi', 'ramen'],
-        'mexican': ['mexican', 'taco', 'burrito'],
-        'burger': ['burger', 'fries'],
-        'cafe': ['cafe', 'coffee', 'cappuccino'],
-        'bar/pub': ['bar', 'pub', 'drinks', 'beer'],
-        'fast food': ['fast food', 'takeaway'],
-        'vegetarian/vegan': ['vegetarian', 'vegan', 'plant-based'],
-        'thai': ['thai', 'pad thai'],
-        'mediterranean': ['mediterranean', 'hummus'],
-        'dessert': ['dessert', 'sweet', 'cake'],
-        'seafood': ['seafood', 'fish', 'prawns'],
-        'vietnamese': ['vietnamese', 'pho'],
-        'ethiopian': ['ethiopian'],
-        'spanish': ['spanish', 'tapas'],
-        'breakfast': ['breakfast', 'brunch']
-    }
+    recommendations_df = restaurant_data_df.copy()
+    # Initialize a base score and a column for matched keywords
+    recommendations_df['score'] = recommendations_df.apply(weighted_rating, axis=1)
+    recommendations_df['matched_keywords'] = [[] for _ in range(len(recommendations_df))]
 
-    # Mood/Atmosphere keywords
-    mood_map = {
-        'quiet': ['quiet', 'peaceful', 'calm', 'relaxing'],
-        'lively': ['lively', 'noisy', 'busy', 'energetic', 'vibrant'],
-        'romantic': ['romantic', 'intimate', 'date'],
-        'cozy': ['cozy', 'warm', 'comfortable', 'homely']
-    }
+    # 檢查並過濾掉評分不足的餐廳 (使用使用者輸入的值)
+    recommendations_df = recommendations_df[
+        (recommendations_df['total_ratings'] >= min_reviews) &
+        (recommendations_df['avg_rating'] >= min_rating)
+        ].copy()
 
-    # Priority keywords
-    priority_map = {
-        'service': ['service', 'staff', 'friendly', 'attentive'],
-        'food quality': ['food quality', 'taste', 'delicious', 'tasty', 'flavour'],
-        'atmosphere': ['atmosphere', 'ambiance', 'vibe', 'decor'],
-        'value': ['value', 'price', 'cheap', 'expensive', 'affordable'],
-        'cleanliness': ['clean', 'dirty', 'hygiene'],
-        'waiting time': ['wait', 'queue', 'slow', 'fast'],
-        'drinks': ['drinks', 'cocktails', 'wine', 'beer'],
-        'location': ['location', 'convenient', 'easy to find'],
-        'dietary options': ['vegan', 'vegetarian', 'gluten-free', 'halal', 'allergies']
-    }
+    if user_lat and user_lng:
+        recommendations_df['distance_m'] = recommendations_df.apply(
+            lambda row: calculate_distance(user_lat, user_lng, row['latitude'], row['longitude']), axis=1)
 
-    # --- Parse food preference ---
-    for food_type, keywords in food_type_map.items():
-        if any(re.search(r'\b' + keyword + r'\b', user_thought_lower) for keyword in keywords):
-            preferences['food_preference'] = food_type
-            break
+        if radius:
+            recommendations_df = recommendations_df[recommendations_df['distance_m'] <= radius].copy()
 
-            # --- Parse mood/atmosphere ---
-    for mood, keywords in mood_map.items():
-        if any(re.search(r'\b' + keyword + r'\b', user_thought_lower) for keyword in keywords):
-            preferences['mood'] = mood
-            break
+    # Process user thought for keywords, using the cleaned string
+    if user_thought_cleaned:
+        # Use regex to find single words and simple phrases
+        user_keywords = re.findall(r'\b\w+\b', user_thought_cleaned.lower())
 
-    # --- Parse priority ---
-    for priority, keywords in priority_map.items():
-        if any(re.search(r'\b' + keyword + r'\b', user_thought_lower) for keyword in keywords):
-            preferences['priority'] = priority
-            break
+        # Scoring based on a new tiered priority system: Food > Reviews > Priority Tags
+        for index, row in recommendations_df.iterrows():
+            score_boost = 0
+            matched = []
 
-    # --- Parse location (conversational keyword matching for areas) ---
-    birmingham_areas = [
-        'birmingham city centre', 'jewellery quarter', 'chinatown',
-        'brindleyplace', 'digbeth', 'mailbox', 'new street station',
-        'bull ring', 'university of birmingham', 'selly oak', 'edgbaston'
-    ]
-    for area in birmingham_areas:
-        if area in user_thought_lower:
-            preferences['location'] = area
-            break
+            # 1. 優先匹配 food_type_tags (最高加權)
+            for keyword in user_keywords:
+                if keyword in [tag.lower() for tag in row['food_type_tags']]:
+                    score_boost += 2.5  # 匹配食物標籤給予最高分數
+                    if keyword not in matched:
+                        matched.append(keyword)
 
-    return preferences
+            # 2. 其次匹配 all_review_texts (中等加權)
+            if isinstance(row['all_review_texts'], str):
+                review_text_lower = row['all_review_texts'].lower()
+                for keyword in user_keywords:
+                    if keyword in review_text_lower:
+                        score_boost += 1.5  # 匹配評論文字給予中等分數
+                        if keyword not in matched:
+                            matched.append(keyword)
+
+            # 3. 最後匹配 priority_tags (最低加權)
+            for keyword in user_keywords:
+                if keyword in [tag.lower() for tag in row['priority_tags']]:
+                    score_boost += 0.5  # 匹配重點標籤給予最低分數
+                    if keyword not in matched:
+                        matched.append(keyword)
+
+            # 應用分數加權並更新匹配關鍵字
+            recommendations_df.at[index, 'score'] += score_boost
+            recommendations_df.at[index, 'matched_keywords'] = matched
+
+    # Sort by score and return top recommendations
+    return recommendations_df.sort_values(by='score', ascending=False).head(10)
 
 
-app = Flask(__name__)
-
-# --- Configure your processed CSV file path ---
-PROCESSED_CSV_FILENAME = "birmingham_restaurants_20250725_000229_processed.csv"
-# --------------------------------------------
-
-# Load data once when the application starts
-restaurant_data_df = load_processed_data(PROCESSED_CSV_FILENAME)
-
-
+# Main route
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    recommendations = None
+    recommendations_df = pd.DataFrame()
     user_thought = ""
-    error_message = None
     user_location_input = ""
     user_radius_input = ""
+    error_message = None
 
     if request.method == 'POST':
-        user_thought = request.form.get('user_thought', '').strip()
-        user_location_input = request.form.get('user_location_input', '').strip()
-        user_radius_input = request.form.get('user_radius_input', '').strip()
+        user_thought = request.form.get('user_thought', '')
+        user_location_input = request.form.get('user_location_input', '')
+        user_radius_input = request.form.get('user_radius_input', '')
 
-        if not user_thought and not user_location_input:
-            error_message = "Please enter your thoughts or a location to search!"
-        elif restaurant_data_df.empty:
-            error_message = "Recommendation data not loaded or is empty. Please check the processed CSV file."
-        else:
-            # Check if thought input contains non-English characters
-            if user_thought and not all(ord(c) < 128 for c in user_thought):
-                error_message = "Please enter your conversational preferences in English only."
-            else:
-                # Parse conversational user input
-                user_preferences = parse_conversational_input(user_thought)
-                print(f"Parsed conversational preferences: {user_preferences}")
+        # 解析使用者輸入文字，獲得動態篩選條件和清理後的關鍵字
+        min_rating, min_reviews, cleaned_user_thought = parse_user_filters(user_thought)
 
-                user_lat, user_lng = None, None
-                search_radius_m = None
+        if not restaurant_data_df.empty:
+            user_lat, user_lng = None, None
+            radius = None
 
-                # Process user's location and radius input
-                if user_location_input:
-                    try:
-                        geocode_result = gmaps_client.geocode(user_location_input)
-                        if geocode_result:
-                            user_lat = geocode_result[0]['geometry']['location']['lat']
-                            user_lng = geocode_result[0]['geometry']['location']['lng']
-                            print(f"Geocoded user location: {user_lat}, {user_lng}")
-                        else:
-                            error_message = f"Could not find coordinates for '{user_location_input}'. Please check the location spelling."
-                    except Exception as e:
-                        error_message = f"Error geocoding location: {e}. Please check your Google Maps API Key and network connection."
+            if user_location_input:
+                user_lat, user_lng = geocode_location(user_location_input)
 
-                if not error_message and user_radius_input:
-                    try:
-                        search_radius_m = int(user_radius_input)
-                        if search_radius_m <= 0:
-                            error_message = "Search radius must be a positive number."
-                    except ValueError:
-                        error_message = "Invalid radius. Please enter a number for the radius."
+            if user_radius_input:
+                try:
+                    radius = int(user_radius_input)
+                except (ValueError, TypeError):
+                    error_message = "Search radius must be a valid number."
 
-                if not error_message:
-                    # Perform recommendation, passing location and radius
-                    # Pass the full restaurant_data_df to recommend_restaurants
-                    # so C (overall average rating) can be calculated from the full dataset.
-                    recommendations = recommend_restaurants(
-                        restaurant_data_df,  # Pass the original full dataframe
-                        user_preferences,
-                        top_n=5,
-                        user_lat=user_lat,
-                        user_lng=user_lng,
-                        search_radius_m=search_radius_m
-                    )
+            # Proceed with recommendation if no errors
+            if not error_message:
+                recommendations_df = get_recommendations_with_keywords(
+                    cleaned_user_thought, min_rating, min_reviews, user_lat, user_lng, radius
+                )
 
-                    if recommendations.empty:
-                        # Specific error message for no results within radius
-                        if user_lat is not None and user_lng is not None and search_radius_m is not None:
-                            error_message = f"Sorry, no restaurants found within {search_radius_m} meters of '{user_location_input}'. Please try broadening your search radius or changing your location."
-                        # Check if no restaurants meet the MIN_RATINGS_THRESHOLD
-                        elif restaurant_data_df['total_ratings'].max() < MIN_RATINGS_THRESHOLD:
-                            error_message = f"No restaurants in your dataset have at least {MIN_RATINGS_THRESHOLD} overall Google ratings. Please lower the minimum ratings threshold in app.py or collect more data."
-                        else:
-                            error_message = "Sorry, no restaurants matching your preferences were found. Please try broadening your input or changing keywords."
+            # Check if recommendations were found
+            if recommendations_df.empty:
+                # Check for possible reasons
+                if user_location_input and (user_lat is None or user_lng is None):
+                    error_message = f"Could not find coordinates for '{user_location_input}'. Please check the spelling or try broadening your search radius or changing your location."
+                else:
+                    error_message = "Sorry, no restaurants matching your preferences were found. Please try broadening your input or changing keywords."
 
-    return render_template('index.html',
-                           recommendations=recommendations,
+    # --- FIX: Convert DataFrame to a list of dictionaries for JSON serialization ---
+    recommendations_list = []
+    if recommendations_df is not None:
+        recommendations_list = recommendations_df.to_dict('records')
+
+    return render_template('index_with_nearby.html',
+                           recommendations=recommendations_list,  # <- 使用轉換後的列表
                            user_thought=user_thought,
                            user_location_input=user_location_input,
                            user_radius_input=user_radius_input,

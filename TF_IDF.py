@@ -4,7 +4,6 @@ import re
 from collections import Counter
 import os
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.feature_extraction import text
 
 
 def get_restaurant_tags(all_review_texts):
@@ -122,21 +121,7 @@ def generate_tfidf_keywords(df):
     df = df.dropna(subset=[text_column])
 
     # 初始化 TF-IDF Vectorizer
-    # 自訂 stopwords
-    default_stopwords = text.ENGLISH_STOP_WORDS
-    custom_stopwords = list(default_stopwords) + [
-        'food', 'restaurant', 'place', 'nice', 'delicious', 'eat', 'ate', 'dish', 'meal',
-        'went', 'come', 'get', 'order', 'ordered', 'like', 'good', 'great', 'time', 'love',
-        'month','day'
-    ]
-
-    # 改用 bigram 模型與濾除太常見/太稀有字詞
-    vectorizer = TfidfVectorizer(
-        stop_words=custom_stopwords,
-        ngram_range=(1, 2),
-        max_df=0.9,
-        min_df=2
-    )
+    vectorizer = TfidfVectorizer(stop_words='english', max_features=1000)
 
     # 計算 TF-IDF 矩陣
     tfidf_matrix = vectorizer.fit_transform(df[text_column])
