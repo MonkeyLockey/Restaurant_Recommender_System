@@ -1,0 +1,37 @@
+{% macro restaurant_card(r) -%}
+<div class="border-b border-gray-200 pb-4 mb-4 last:border-0 last:pb-0 last:mb-0">
+  <div class="flex items-start">
+    <h3 class="text-xl font-semibold text-indigo-600 flex-grow">
+      <a href="https://www.google.com/maps/place/?q=place_id:{{ r['place_id'] }}" target="_blank" class="hover:underline">
+        {{ r['restaurant_name'] }}
+      </a>
+    </h3>
+    <p class="flex-shrink-0 text-gray-900 font-bold ml-4">
+      ⭐ {{ r['avg_rating']|round(1) }} <span class="text-gray-500 font-normal">({{ r['total_ratings']|int }})</span>
+    </p>
+  </div>
+  <p class="text-sm text-gray-500 mt-1">{{ r['address'] }}</p>
+  {% if r['food_type_tags'] %}
+    <div class="mt-2">
+      <span class="text-gray-700 text-sm font-medium">🍽️ Cuisines:</span>
+      {% for tag in r['food_type_tags'] %}
+        <span class="inline-block bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded-full mr-1 mt-1">{{ tag }}</span>
+      {% endfor %}
+    </div>
+  {% endif %}
+  {% if r['priority_tags'] %}
+    <div class="mt-2">
+      <span class="text-gray-700 text-sm font-medium">🎯 Highlights:</span>
+      {% for tag in r['priority_tags'] %}
+        <span class="inline-block bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full mr-1 mt-1">{{ tag }}</span>
+      {% endfor %}
+    </div>
+  {% endif %}
+  {% if r['opening_hours'] %}
+    <p class="text-sm text-gray-500 mt-2">🕒 Hours: {{ r['opening_hours']|join(', ') }}</p>
+  {% endif %}
+  {% if r['distance_m'] %}
+    <p class="text-sm text-gray-500 mt-1">📏 Approx. {{ r['distance_m']|round|int }} meters away</p>
+  {% endif %}
+</div>
+{%- endmacro %}

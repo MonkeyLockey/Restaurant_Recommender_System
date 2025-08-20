@@ -1,0 +1,20 @@
+{% from "partials/_macros.html" import restaurant_card %}
+
+{% if recommendations %}
+  <div class="bg-white shadow-md rounded-2xl p-4">
+    <h2 class="text-2xl font-bold text-gray-800 mb-4">✨ Your Recommendations</h2>
+    {% for r in recommendations %}
+      {{ restaurant_card(r) }}
+    {% endfor %}
+  </div>
+{% elif error_message %}
+  <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative">
+    <strong class="font-bold">Error:</strong>
+    <span class="block sm:inline">{{ error_message }}</span>
+  </div>
+{% else %}
+  <div class="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded relative">
+    <strong class="font-bold">Notice:</strong>
+    <span class="block sm:inline">No recommendations yet. Please enter your preferences above to get started.</span>
+  </div>
+{% endif %}

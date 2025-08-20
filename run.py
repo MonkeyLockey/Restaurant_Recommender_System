@@ -1,102 +1,137 @@
 import sys
 from datetime import datetime
 import os
-
-# 從 scraper 套件中導入核心邏輯
+import logging
 from scraper.core import RestaurantScraper, get_location_config
+from dotenv import load_dotenv
 
+load_dotenv()
 
 def run_scraper_main():
-    API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")  # Load from environment variable
+    # --- Generate a unified base filename with timestamp ---
+    current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_filename = f"birmingham_restaurants_scrape_{current_timestamp}" # Unified base filename
+
+    output_csv_filename = f"{base_filename}.csv" # CSV output filename
+    log_filename = f"{base_filename}.txt"       # Log file name (.txt extension)
+
+    # --- Configure logging: Output logs to a separate file and simultaneously to the console ---
+    # logging.basicConfig here configures the root logger.
+    # All loggers obtained from core.py (and any other modules) will inherit this configuration initially.
+    logging.basicConfig(
+        level=logging.INFO, # Set to INFO, displays INFO, WARNING, ERROR level messages
+        format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_filename, mode='w', encoding='utf-8'), # Output to file, 'w' mode creates a new file each run
+            logging.StreamHandler(sys.stdout) # Also output to console
+        ]
+    )
+    # Get an instance of the logger for run.py itself (optional, but recommended)
+    main_logger = logging.getLogger(__name__)
+
+    # --- NEW: Set a higher logging level specifically for the 'scraper.core' module ---
+    # This will reduce the verbosity from internal scraping details, showing mostly warnings/errors.
+    # Use logging.WARNING to see warnings and errors.
+    # Use logging.ERROR to see only errors.
+    logging.getLogger('scraper.core').setLevel(logging.WARNING)
+    # ----------------------------------------------------------------------------------
+
+    main_logger.info(f"Starting scraper run at: {current_timestamp}")
+    main_logger.info(f"Logs will be output to: {log_filename}")
+    main_logger.info(f"Scraping results will be saved to: {output_csv_filename}")
+    # --------------------------------------------------------
+
+    # Get API KEY from .env
+    API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
+    if not API_KEY:
+        main_logger.error("Error: GOOGLE_MAPS_API_KEY environment variable not set. Please set it before running.")
+        sys.exit(1)  # Exit if API key is not found
 
     history_data_filename = "birmingham_restaurants_history.csv"
-    current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = f"birmingham_restaurants_{current_timestamp}.csv"
 
     scraper = RestaurantScraper(API_KEY, existing_csv_filename=history_data_filename)
 
     locations = get_location_config()
 
-    # --- 新增: 定義要搜尋的地點類型列表 ---
-    search_types = ["restaurant", "cafe", "bar", "pub", "takeaway", "fast_food"]  # 您可以根據需要調整這些類型
-    # ------------------------------------
+    # --- Define the list of place types to search for ---
+    search_types = ["restaurant", "cafe", "bar", "pub", "takeaway", "fast_food"]  # You can adjust these types as needed
+    # ----------------------------------------------------
 
-    print("=== 搜尋範圍設定 ===")
-    print("🎯 使用網格搜尋法突破 60 家餐廳限制")
-    print(f"🔍 將搜尋以下類型: {', '.join(search_types)}")  # 顯示搜尋類型
-    print("📍 Birmingham City Centre 分為多個重疊區域:")
+    main_logger.info("=== Search Scope Settings ===")
+    main_logger.info("Using grid search strategy to overcome the 60-restaurant limit")
+    main_logger.info(f"Will search for the following types: {', '.join(search_types)}")
+    main_logger.info("Birmingham City Centre is divided into overlapping areas:")
     city_centre_areas = [loc for loc in locations if
                          "Birmingham" in loc['name'] and "University" not in loc['name'] and "Selly Oak" not in loc[
                              'name'] and "Edgbaston" not in loc['name']]
     for i, location in enumerate(city_centre_areas, 1):
-        print(f"   {i}. {location['description']} - {location['radius'] / 1000}km 半徑")
+        main_logger.info(f"   {i}. {location['description']} - {location['radius'] / 1000}km radius")
 
-    print("\n📍 University of Birmingham 及周邊區域:")
+    main_logger.info("\nUniversity of Birmingham and surrounding areas:")
     uob_areas = [loc for loc in locations if
                  "University" in loc['name'] or "Selly Oak" in loc['name'] or "Edgbaston" in loc['name']]
     for i, location in enumerate(uob_areas, 1):
-        print(f"   {i}. {location['description']} - {location['radius'] / 1000}km 半徑")
+        main_logger.info(f"   {i}. {location['description']} - {location['radius'] / 1000}km radius")
 
-    print(f"\n💡 總共 {len(locations)} 個搜尋區域，預計可獲取大量獨特地點")  # 更新描述
-    print("🔄 自動去重功能將移除重複的地點，節省API費用")  # 更新描述
-    print()
+    main_logger.info(f"\nThere are a total of {len(locations)} search areas. Expecting to fetch a large number of unique places.")
+    main_logger.info("Automatic deduplication will remove duplicate places, saving API costs.")
+    main_logger.info("")
 
-    print("\n=== 語言設定 ===")
-    language_choice = input("選擇評論語言:\n1. 原文評論 (不翻譯)\n2. 英文翻譯\n請選擇 (1/2): ")
+    main_logger.info("\n=== Language Settings ===")
+    language_choice = input("Select review language:\n1. Original review text (no translation)\n2. English translation\nPlease choose (1/2): ")
     use_original_language = (language_choice == '1')
 
     if use_original_language:
-        print("將獲取原文評論")
+        main_logger.info("Will fetch original review text.")
     else:
-        print("將獲取英文翻譯評論")
+        main_logger.info("Will fetch English translated reviews.")
 
     num_locations = len(locations)
-    # --- 更新 API 預估: 每個地點會對每個類型進行 Places Nearby Search ---
+    # --- Updated API estimation: Each location will perform Places Nearby Search for each type ---
     num_search_types = len(search_types)
-    total_max_restaurants_per_search = sum(loc['limit'] for loc in locations)  # 這裡的 limit 仍是單一地點的總獨特上限
+    total_max_restaurants_per_search = sum(loc['limit'] for loc in locations)  # The limit here is still the total unique limit for a single location
 
     estimated_geocode_calls = num_locations
-    estimated_nearby_search_calls = num_locations * num_search_types * 3  # 每個地點 * 每個類型 * 最多 3 頁
+    estimated_nearby_search_calls = num_locations * num_search_types * 3  # Each location * each type * up to 3 pages
 
-    # Place Details 的呼叫次數取決於去重後的實際數量，理論最大值是所有地點的 limit 總和。
-    # 現實預估可以基於總地點數和每個地點預計貢獻的獨特地點數。
-    estimated_place_details_calls_max = total_max_restaurants_per_search  # 理論最大值 (所有地點都返回滿60家且完全不重複)
-    estimated_place_details_calls_realistic = int(num_locations * 30 * (num_search_types / 2))  # 粗略估計，可能更多獨特地點
+    # The number of Place Details calls depends on the actual number after deduplication, the theoretical maximum is the sum of limits for all locations.
+    # A realistic estimate can be based on the total number of locations and the estimated number of unique places each location contributes.
+    estimated_place_details_calls_max = total_max_restaurants_per_search  # Theoretical maximum (if all locations return full 60 places and are completely unique)
+    estimated_place_details_calls_realistic = int(num_locations * 30 * (num_search_types / 2))  # Rough estimate, could be more unique places
 
     total_estimated_calls_worst_case = estimated_geocode_calls + estimated_nearby_search_calls + estimated_place_details_calls_max
     total_estimated_calls_realistic = estimated_geocode_calls + estimated_nearby_search_calls + estimated_place_details_calls_realistic
 
-    print("=== API使用說明 ===")
-    print("⚠️  Google Places API 限制:")
-    print("    - 每個 Places Nearby Search (單一類型) 最多返回 60 家地點 (分 3 頁，每頁 20 家)")
-    print("    - 最大搜尋半徑: 50公里")
-    print(f"\n📊 預估API調用 (共 {num_locations} 個搜尋區域，{num_search_types} 種地點類型):")
-    print(f"- Geocoding API: {estimated_geocode_calls} 次")
-    print(f"- Places Nearby Search: 最多 {estimated_nearby_search_calls} 次 (每個地點 * 每個類型 * 最多 3 次，包括分頁)")
-    print(f"- Place Details: 預估 {estimated_place_details_calls_realistic} 次 (去重後)")
-    print(f"  └─ 理論最大值: {estimated_place_details_calls_max} 次 (無重複情況)")
-    print(f"\n💰 預估費用 (基於 $0.017/次 Nearby Search 或 Place Details):")
-    print(f"- 現實預估: ${total_estimated_calls_realistic * 0.017:.2f} USD")
-    print(f"- 最壞情況: ${total_estimated_calls_worst_case * 0.017:.2f} USD")
-    print(f"\n📝 注意:")
-    print(f"- 使用網格搜尋法，預計可獲取大量獨特地點")
-    print(f"- 重疊區域和不同類型的重複地點會自動去重，有效節省API費用")
-    print(f"- 從 '{history_data_filename}' 加載歷史數據進行跨運行去重")
+    main_logger.info("=== API Usage Information ===")
+    main_logger.info("Google Places API Limits:")
+    main_logger.info("    - Places Nearby Search (single type) returns a maximum of 60 places per call (3 pages, 20 places per page).")
+    main_logger.info("    - Maximum search radius: 50 kilometers.")
+    main_logger.info(f"\nEstimated API Calls (total {num_locations} search areas, {num_search_types} place types):")
+    main_logger.info(f"- Geocoding API: {estimated_geocode_calls} calls.")
+    main_logger.info(f"- Nearby Search: Up to {estimated_nearby_search_calls} calls (per area * per type * up to 3 times, including pagination).")
+    main_logger.info(f"- Place Details: Estimated {estimated_place_details_calls_realistic} calls (after deduplication).")
+    main_logger.info(f"  └─ Theoretical maximum: {estimated_place_details_calls_max} calls (no duplicates).")
+    main_logger.info(f"\nEstimated Cost (based on $0.017 USD per Nearby Search or Place Details call):")
+    main_logger.info(f"- Realistic Estimate: ${total_estimated_calls_realistic * 0.017:.2f} USD")
+    main_logger.info(f"- Worst-Case Estimate: ${total_estimated_calls_worst_case * 0.017:.2f} USD")
+    main_logger.info("\nNote:")
+    main_logger.info("- Using a grid search strategy is expected to yield a large number of unique places.")
+    main_logger.info("- Duplicates due to overlapping areas and different types will be automatically deduplicated, effectively saving API costs.")
+    main_logger.info(f"- Historical data from '{history_data_filename}' is loaded for cross-run deduplication.")
 
-    confirm = input("\n是否繼續執行? (y/n): ")
+    confirm = input("\nDo you want to continue execution? (y/n): ")
     if confirm.lower() != 'y':
-        print("程式已取消")
+        main_logger.info("Program cancelled by user.")
         return
 
-    print("\n開始網格搜尋地點...")  # 更新描述
-    print("=" * 50)
+    main_logger.info("\nStarting grid search for places...")
+    main_logger.info("=" * 50)
 
     for i, location_config in enumerate(locations, 1):
-        print(f"\n🔍 [{i}/{len(locations)}] 搜尋區域: {location_config['description']}")
-        print(f"📍 地點: {location_config['name']}")
-        print(f"📏 半徑: {location_config['radius'] / 1000}km")
+        main_logger.info(f"\n[{i}/{len(locations)}] Searching area: {location_config['description']}")
+        main_logger.info(f"Location: {location_config['name']}")
+        main_logger.info(f"Radius: {location_config['radius'] / 1000}km")
 
-        # --- 新增 try-except 塊來捕獲 search_restaurants 呼叫時可能發生的錯誤 ---
         try:
             before_count = len(scraper.processed_place_ids)
             scraper.search_restaurants(
@@ -109,40 +144,38 @@ def run_scraper_main():
             after_count = len(scraper.processed_place_ids)
             new_restaurants_added_in_this_area = after_count - before_count
 
-            print(f"✅ 此區域新增 {new_restaurants_added_in_this_area} 家地點")
-            print(f"📊 目前總計: {after_count} 家獨特地點")
-            print("-" * 30)
+            main_logger.info(f"Added {new_restaurants_added_in_this_area} new places in this area.")
+            main_logger.info(f"Current total unique places: {after_count}.")
+            main_logger.info("-" * 30)
         except Exception as e:
-            print(f"❌ 錯誤: 在處理區域 '{location_config['description']}' 時發生問題: {e}")
-            print("請檢查 API Key、網路連線或該區域的設定。程式將嘗試繼續處理下一個區域。")
-            # 這裡選擇 `continue`，讓程式即使遇到錯誤也能嘗試處理其他區域
+            main_logger.error(f"Error: Problem occurred while processing area '{location_config['description']}': {e}")
+            main_logger.error("Please check your API key, network connection, or configuration for this area. The program will attempt to continue with the next area.")
             continue
-            # --------------------------------------------------------------------
 
     scraper.print_summary()
-    scraper.save_to_csv(output_filename)
+    scraper.save_to_csv(output_csv_filename) # Use the new unified filename
 
-    print(f"\n🎯 網格搜尋策略成功完成！")
-    print(f"📁 資料已保存至: {output_filename}")
-    print(f"💡 提示: 將 '{output_filename}' 重命名為 '{history_data_filename}' 以供下次去重使用")
+    main_logger.info(f"\nGrid search strategy completed successfully!")
+    main_logger.info(f"Data saved to: {output_csv_filename}")
+    main_logger.info(f"Hint: Rename '{output_csv_filename}' to '{history_data_filename}' for deduplication in the next run.")
 
-    print(f"\n🏆 最終統計")
-    print(f"📞 實際API調用次數: {scraper.api_call_count}")
-    print(f"💰 實際費用: ${scraper.api_call_count * 0.017:.2f} USD")
-    print(f"🏪 獲取地點總數 (包含重複條目): {len(scraper.restaurants_data)} 家")  # 更新描述
-    print(f"🔑 獨特地點總數: {len(scraper.processed_place_ids)} 家")  # 更新描述
-    print(f"🎯 覆蓋Birmingham全區域: ✅")
+    main_logger.info(f"\nFinal Statistics")
+    main_logger.info(f"Actual API calls: {scraper.api_call_count}")
+    main_logger.info(f"Actual cost: ${scraper.api_call_count * 0.017:.2f} USD")
+    main_logger.info(f"Total places fetched (including duplicate entries): {len(scraper.restaurants_data)} ")
+    main_logger.info(f"Total unique places: {len(scraper.processed_place_ids)} ")
+    main_logger.info(f"Birmingham overall coverage: ") # This line might need more context if it's meant to display a specific metric.
 
-    print(f"\n📈 搜尋效果分析:")
-    print(f"- 預期最大地點數 (所有搜尋區域的上限總和): {total_max_restaurants_per_search} 家")  # 更新描述
-    print(f"- 實際獲取獨特地點數: {len(scraper.processed_place_ids)} 家")  # 更新描述
+    main_logger.info(f"\nSearch Effectiveness Analysis:")
+    main_logger.info(f"- Expected maximum number of places (sum of limits for all search areas): {total_max_restaurants_per_search} ")
+    main_logger.info(f"- Actual unique places fetched: {len(scraper.processed_place_ids)} ")
     efficiency = (
                              len(scraper.processed_place_ids) / total_max_restaurants_per_search) * 100 if total_max_restaurants_per_search > 0 else 0
-    print(f"- 搜尋效率 (獨特地點佔理論最大值): {efficiency:.1f}%")  # 更新描述
+    main_logger.info(f"- Search efficiency (unique places as a percentage of theoretical maximum): {efficiency:.1f}%")
     if efficiency < 50:
-        print("💡 效率較低可能是因為區域重疊導致大量重複，這是正常現象，去重功能已節省費用。")
+        main_logger.info("Lower efficiency might be due to significant overlaps between areas, which is normal. Deduplication has saved costs.")
     else:
-        print("🎉 高效率搜尋，成功獲取大量獨特地點！")
+        main_logger.info("High efficiency search, successfully retrieved a large number of unique places!")
 
 
 if __name__ == "__main__":

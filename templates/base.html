@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>{% block title %}Restaurant Recommendation{% endblock %}</title>
+
+  <!-- Fonts & Tailwind CSS -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Custom CSS (if any) -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
+
+  <!-- Google Maps API key and callback passed to frontend via meta tag -->
+  <!-- The `callback=initMap` here is crucial. `initMap` function will be called once the Maps API is loaded. -->
+  <meta id="gmaps-config" data-key="{{ gmaps_api_key }}" data-callback="initMap">
+
+  <!-- External JS (deferred loading) -->
+  <!-- These scripts will be loaded AFTER the DOM is parsed, but before DOMContentLoaded fires. -->
+  <script src="{{ url_for('static', filename='js/maps-init.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/nearby.js') }}"></script>
+
+  {% block head_extras %}{% endblock %}
+</head>
+<body class="bg-gray-50 font-sans">
+  {% block content %}{% endblock %}
+</body>
+</html>

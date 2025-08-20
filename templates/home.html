@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block head_extras %}
+<script>
+  window.initialRecommendations = {{ recommendations|tojson|safe }};
+  window.initialSelectedLocationSource = "{{ selected_location_source | default('current_location') }}";
+  window.initialUserLocationInput = "{{ user_location_input | default('') }}";
+  window.initialUserRadiusInput = "{{ user_radius_input | default('') }}";
+  console.log("home.html: Injected initialRecommendations:", window.initialRecommendations);
+  console.log("home.html: Injected initialSelectedLocationSource:", window.initialSelectedLocationSource);
+  console.log("home.html: Injected initialUserLocationInput:", window.initialUserLocationInput);
+  console.log("home.html: Injected initialUserRadiusInput:", window.initialUserRadiusInput);
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="flex flex-col lg:flex-row max-w-7xl mx-auto p-6 gap-6">
+  <div class="lg:w-2/3 w-full">
+    {% include "partials/_search_form.html" %}
+    {% include "partials/_map.html" %}
+    {% include "partials/_recommendations.html" %}
+  </div>
+  {% include "partials/_top_nearby.html" %}
+</div>
+{% endblock %}

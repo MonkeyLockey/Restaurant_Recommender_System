@@ -1,0 +1,62 @@
+<div class="bg-white shadow-md rounded-2xl p-6 mb-6">
+  <h1 class="text-3xl font-bold text-center text-gray-800 mb-2">Find Restaurants</h1>
+  <p class="text-center text-gray-500 mb-6">Tell us what you’d like to eat!</p>
+  <form action="/" method="post" class="space-y-4">
+    <div>
+      <label for="user_thought" class="block text-sm font-medium text-gray-700">
+        Your preferences (e.g., "Korean BBQ, over 4 stars")
+      </label>
+      <input type="text" id="user_thought" name="user_thought"
+             value="{{ user_thought }}"
+             placeholder="e.g., Italian food, relaxed atmosphere, over 4 stars"
+             class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2">
+    </div>
+
+    <!-- Location source selection: user can choose current location or enter manually -->
+    <div>
+      <label class="block text-sm font-medium text-gray-700">Choose location source:</label>
+      <div class="mt-1 flex items-center space-x-4">
+        <label class="inline-flex items-center">
+          <input type="radio" name="location_source" value="current_location"
+                 class="form-radio text-indigo-600" onchange="toggleLocationInput()" id="current_location_radio"
+                 {% if selected_location_source == 'current_location' %}checked{% endif %}>
+          <span class="ml-2 text-gray-700">Use my current location</span>
+        </label>
+        <label class="inline-flex items-center">
+          <input type="radio" name="location_source" value="manual_input"
+                 class="form-radio text-indigo-600" onchange="toggleLocationInput()" id="manual_input_radio"
+                 {% if selected_location_source == 'manual_input' %}checked{% endif %}>
+          <span class="ml-2 text-gray-700">Enter location manually</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Manual location input field (enabled only if manual input is selected) -->
+    <div id="manual_location_input_div">
+      <label for="user_location_input" class="block text-sm font-medium text-gray-700">Your location</label>
+      <input type="text" id="user_location_input" name="user_location_input"
+             value="{{ user_location_input }}"
+             placeholder="e.g., Birmingham City Centre"
+             class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2"
+             {% if selected_location_source == 'current_location' %}disabled{% endif %}>
+    </div>
+
+    <!-- Optional: user can set a custom search radius -->
+    <div>
+      <label for="user_radius_input" class="block text-sm font-medium text-gray-700">Search radius (meters) (optional)</label>
+      <input type="number" id="user_radius_input" name="user_radius_input"
+             value="{{ user_radius_input }}"
+             placeholder="e.g., 2000"
+             class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2">
+    </div>
+
+    <!-- Hidden fields for latitude and longitude, dynamically filled by JavaScript -->
+    <input type="hidden" id="user_lat" name="user_lat" value="">
+    <input type="hidden" id="user_lng" name="user_lng" value="">
+
+    <button type="submit"
+            class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition duration-150 ease-in-out shadow-md">
+      Find Restaurants
+    </button>
+  </form>
+</div>

@@ -1,7 +1,5 @@
 import pandas as pd
 import json
-import re
-from collections import Counter
 import os
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction import text
@@ -117,12 +115,12 @@ def generate_tfidf_keywords(df):
     """
     print("\n--- Starting TF-IDF keyword generation ---")
 
-    # 確保 'all_review_texts' 欄位存在且沒有空值
+    # Ensure the 'all_review_texts' column exists and has no empty values
     text_column = "all_review_texts"
     df = df.dropna(subset=[text_column])
 
-    # 初始化 TF-IDF Vectorizer
-    # 自訂 stopwords
+    # Initialize TF-IDF Vectorizer
+    # Customize stopwords
     default_stopwords = text.ENGLISH_STOP_WORDS
     custom_stopwords = list(default_stopwords) + [
         'food', 'restaurant', 'place', 'nice', 'delicious', 'eat', 'ate', 'dish', 'meal',
@@ -130,7 +128,7 @@ def generate_tfidf_keywords(df):
         'month','day'
     ]
 
-    # 改用 bigram 模型與濾除太常見/太稀有字詞
+    # Use a bigram model and filter out words that are too common/too rare
     vectorizer = TfidfVectorizer(
         stop_words=custom_stopwords,
         ngram_range=(1, 2),
@@ -138,16 +136,16 @@ def generate_tfidf_keywords(df):
         min_df=2
     )
 
-    # 計算 TF-IDF 矩陣
+    # Calculate the TF-IDF matrix
     tfidf_matrix = vectorizer.fit_transform(df[text_column])
     feature_names = vectorizer.get_feature_names_out()
 
-    # 找出每行（每間餐廳）的熱門關鍵字
+    # Find the top keywords for each row (each restaurant)
     top_keywords_per_row = []
     for row in tfidf_matrix:
         row_data = row.toarray().flatten()
-        top_indices = row_data.argsort()[::-1][:10]  # 取得前10個最高分索引
-        # 只保留分數大於0的關鍵字
+        top_indices = row_data.argsort()[::-1][:10]  # Get the top 10 highest-scoring indices
+        # Only keep keywords with a score greater than 0
         top_keywords = [feature_names[i] for i in top_indices if row_data[i] > 0]
         top_keywords_per_row.append(top_keywords)
 
@@ -232,7 +230,7 @@ def process_and_tag_data(sentiment_csv_filename):
     # --- Now, perform TF-IDF keyword generation and combine all keywords ---
     df_with_tfidf = generate_tfidf_keywords(aggregated_df)
 
-    # 整合所有關鍵字到一個新的欄位
+    # Consolidate all keywords into a new column
     df_with_tfidf['all_keywords_for_recommendation'] = df_with_tfidf.apply(
         lambda row: list(set(
             json.loads(row['food_type_tags']) +
@@ -253,7 +251,7 @@ def process_and_tag_data(sentiment_csv_filename):
     df_with_tfidf.to_csv(output_processed_csv, index=False, encoding='utf-8-sig')
     print(f"\nProcessed restaurant data saved to: {output_processed_csv}")
 
-    # 另外儲存 TF-IDF 關鍵字檔案以供參考
+    # Also save TF-IDF keywords file for reference
     output_tfidf_csv = sentiment_csv_filename.replace("_sentiment.csv", "_tfidf_keywords_output.csv")
     df_with_tfidf[['restaurant_name', 'tfidf_keywords']].to_csv(output_tfidf_csv, index=False)
     print(f"TF-IDF keywords also saved to: {output_tfidf_csv}")
@@ -262,9 +260,9 @@ def process_and_tag_data(sentiment_csv_filename):
 
 
 if __name__ == "__main__":
-    sentiment_csv_to_process = "birmingham_restaurants_20250725_000229_sentiment.csv"
+    sentiment_csv_to_process = "birmingham_restaurants_20250818_231548_sentiment.csv"
 
-    # 執行完整的資料處理，包括 TF-IDF 和關鍵字整合
+    # Execute the full data processing, including TF-IDF and keyword integration
     processed_data = process_and_tag_data(sentiment_csv_to_process)
 
     if not processed_data.empty:
