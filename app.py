@@ -360,4 +360,8 @@ if __name__ == '__main__':
     if restaurant_data_df.empty:
         print(
             "Warning: Restaurant data failed to load or is empty. Please ensure the processed CSV file exists and is correctly formatted.")
-    app.run(debug=True)
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", 5000))
+
+    # For local testing, use debug=True
+    app.run(host=host, port=port, debug=False)
