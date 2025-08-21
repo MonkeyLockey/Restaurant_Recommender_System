@@ -140,8 +140,8 @@ def calculate_final_rating(df, keywords=None):
                 if isinstance(row.get('all_keywords_for_recommendation'), list):
                     if any(re.search(re.escape(kw), str(tag), re.IGNORECASE) for tag in
                            row['all_keywords_for_recommendation']):
-                        score += 0.03
-            return min(score, 0.15)
+                        score += 0.05
+            return min(score, 0.2)
 
         df_temp['weighted_rating'] += df_temp.apply(tag_bonus, axis=1)
 
