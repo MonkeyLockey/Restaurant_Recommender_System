@@ -11,6 +11,7 @@ import numpy as np
 
 load_dotenv()
 
+# --- Configuration Constants ---
 API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY")
 if not API_KEY:
     print("Error: GOOGLE_MAPS_API_KEY environment variable not set. Please set it before running the application.")
@@ -21,10 +22,15 @@ gmaps_client = googlemaps.Client(key=API_KEY)
 DEFAULT_MIN_REVIEWS = 10
 DEFAULT_MIN_RATING = 3.5
 
+# Bayesian Average Parameters
 M_BAYESIAN_AVG_CONFIDENCE = 10
 MIN_RATINGS_THRESHOLD = 10
 
+# Sentiment Weight Factor
+SENTIMENT_WEIGHT_FACTOR = 0.2
 
+
+# --- Data Loading ---
 def load_processed_data(filename):
     """
     Loads processed restaurant data from a CSV file.
@@ -39,17 +45,21 @@ def load_processed_data(filename):
 
     df = pd.read_csv(filename)
 
-    for col in ['food_type_tags', 'priority_tags', 'opening_hours']:
+    for col in ['food_type_tags', 'priority_tags', 'all_keywords_for_recommendation', 'opening_hours']:
         if col in df.columns:
             df[col] = df[col].apply(lambda x:
-                None if pd.isna(x) or (isinstance(x, str) and x.strip().lower() == 'nan')
-                else (json.loads(x) if isinstance(x, str) and (x.startswith('[') or x.startswith('{')) else x)
-            )
+                                    None if pd.isna(x) or (isinstance(x, str) and x.strip().lower() == 'nan')
+                                    else (json.loads(x) if isinstance(x, str) and (
+                                                x.startswith('[') or x.startswith('{')) else x)
+                                    )
 
     numeric_cols = ['avg_rating', 'total_ratings', 'avg_sentiment_compound', 'latitude', 'longitude']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    if 'avg_sentiment_compound' in df.columns:
+        df['avg_sentiment_compound'] = df['avg_sentiment_compound'].fillna(0)
 
     print(f"Loaded {len(df)} restaurants from {filename}.")
     return df
@@ -59,6 +69,7 @@ RESTAURANT_DATA_FILE = "birmingham_restaurants_20250818_231548_processed.csv"
 restaurant_data_df = load_processed_data(RESTAURANT_DATA_FILE)
 
 
+# --- Utility Functions ---
 def calculate_distance(lat1, lon1, lat2, lon2):
     R = 6371000
     phi1 = math.radians(lat1)
@@ -92,6 +103,51 @@ def filter_restaurants_by_distance(df, user_lat, user_lng, radius_meters):
     return df_in_radius
 
 
+# New unified rating calculation function
+def calculate_final_rating(df, keywords=None):
+    """
+    Calculates the final weighted rating for restaurants based on Bayesian average,
+    sentiment score, and keyword bonus.
+    Args:
+        df (pd.DataFrame): DataFrame with restaurant data.
+        keywords (list): List of user-parsed keywords for bonus points.
+    Returns:
+        pd.DataFrame: DataFrame with the 'final_weighted_rating' column.
+    """
+    if df.empty:
+        return df
+
+    df_temp = df.copy()
+
+    # 1. Calculate Bayesian Average
+    C = df_temp['avg_rating'].mean()
+    M = M_BAYESIAN_AVG_CONFIDENCE
+    df_temp['weighted_rating'] = df_temp.apply(
+        lambda x: ((x['total_ratings'] / (x['total_ratings'] + M)) * x['avg_rating']) + \
+                  ((M / (x['total_ratings'] + M)) * C), axis=1
+    )
+
+    # 2. Add sentiment score bonus
+    if 'avg_sentiment_compound' in df_temp.columns:
+        df_temp['weighted_rating'] += (SENTIMENT_WEIGHT_FACTOR * df_temp['avg_sentiment_compound'])
+
+    # 3. Add tag bonus based on keywords
+    if keywords:
+        def tag_bonus(row):
+            score = 0.0
+            for kw in keywords:
+                # Ensure the column exists and is a list
+                if isinstance(row.get('all_keywords_for_recommendation'), list):
+                    if any(re.search(re.escape(kw), str(tag), re.IGNORECASE) for tag in
+                           row['all_keywords_for_recommendation']):
+                        score += 0.03
+            return min(score, 0.15)
+
+        df_temp['weighted_rating'] += df_temp.apply(tag_bonus, axis=1)
+
+    return df_temp
+
+
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
 
@@ -104,8 +160,7 @@ def index():
     error_message = None
     selected_location_source = 'current_location'
 
-    user_lat_from_form = None
-    user_lng_from_form = None
+    user_lat, user_lng = None, None
 
     if request.method == 'POST':
         user_thought = request.form.get('user_thought', '')
@@ -114,15 +169,11 @@ def index():
         selected_location_source = request.form.get('location_source', 'current_location')
 
         try:
-            user_lat_from_form = float(request.form.get('user_lat')) if request.form.get('user_lat') else None
-            user_lng_from_form = float(request.form.get('user_lng')) if request.form.get('user_lng') else None
-            print(f"Received coordinates from form: Lat={user_lat_from_form}, Lng={user_lng_from_form}")
-        except ValueError:
-            user_lat_from_form = None
-            user_lng_from_form = None
+            user_lat = float(request.form.get('user_lat')) if request.form.get('user_lat') else None
+            user_lng = float(request.form.get('user_lng')) if request.form.get('user_lng') else None
+        except (ValueError, TypeError):
             print("Invalid coordinates received from form.")
-
-        user_lat, user_lng = user_lat_from_form, user_lng_from_form
+            user_lat, user_lng = None, None
 
         if selected_location_source == 'manual_input' and user_location_input and (
                 user_lat is None or user_lng is None):
@@ -131,71 +182,53 @@ def index():
                 if geocode_result:
                     user_lat = geocode_result[0]['geometry']['location']['lat']
                     user_lng = geocode_result[0]['geometry']['location']['lng']
-                    print(f"Server-side geocoded '{user_location_input}' to Lat: {user_lat}, Lng={user_lng}")
                 else:
                     error_message = f"Could not find coordinates for '{user_location_input}'. Please check the spelling."
             except Exception as e:
                 error_message = f"Geocoding error: {e}"
-                print(f"Geocoding error: {e}")
-        elif selected_location_source == 'current_location' and (user_lat is None or user_lng is None):
-            error_message = "Please allow browser to fetch your location, or enter a location manually to get recommendations."
 
-        if user_lat is not None and user_lng is not None and not restaurant_data_df.empty:
-            temp_df = restaurant_data_df.copy()
-
-            C = temp_df['avg_rating'].mean()
-            M = M_BAYESIAN_AVG_CONFIDENCE
-            temp_df['weighted_rating'] = temp_df.apply(
-                lambda x: ((x['total_ratings'] / (x['total_ratings'] + M)) * x['avg_rating']) + \
-                          ((M / (x['total_ratings'] + M)) * C), axis=1
-            )
-
-            filtered_df = temp_df[temp_df['total_ratings'] >= MIN_RATINGS_THRESHOLD].copy()
-
+        if not restaurant_data_df.empty:
+            # 1. Distance filter (pre-filter)
             if user_radius_input:
                 try:
                     radius_meters = int(user_radius_input)
-                    if radius_meters > 0:
-                        print(f"Applying distance filter to main recommendations: {radius_meters}m.")
-                        filtered_df = filter_restaurants_by_distance(
-                            filtered_df, user_lat, user_lng, radius_meters
-                        )
-                        if filtered_df.empty:
-                            error_message = f"No restaurants found within your selected {radius_meters}m radius. Please try widening the radius or changing search preferences."
-                    else:
+                    if radius_meters > 0 and user_lat is not None and user_lng is not None:
+                        temp_df = filter_restaurants_by_distance(restaurant_data_df, user_lat, user_lng, radius_meters)
+                        if temp_df.empty:
+                            error_message = f"No restaurants found within your selected {radius_meters}m radius."
+                    elif radius_meters <= 0:
                         error_message = "Search radius must be a positive number."
-                        filtered_df = pd.DataFrame()
+                        temp_df = pd.DataFrame()
+                    else:
+                        temp_df = restaurant_data_df.copy()
                 except ValueError:
                     error_message = f"Invalid search radius '{user_radius_input}'. Please enter a valid number."
-                    filtered_df = pd.DataFrame()
+                    temp_df = pd.DataFrame()
+            else:
+                temp_df = restaurant_data_df.copy()
 
-            if filtered_df.empty and not error_message:
-                error_message = "Sorry, no restaurants found matching your specified criteria. Please try broadening your preferences."
-                recommendations_df = pd.DataFrame()
-
-            if not error_message and not filtered_df.empty:
+            if error_message is None:
                 parsed_food_types = []
                 parsed_priority_keywords = []
                 min_rating = DEFAULT_MIN_RATING
                 min_reviews = DEFAULT_MIN_REVIEWS
 
                 if user_thought:
+                    # Parse rating and reviews from user input
                     rating_match = re.search(r'(?:over\s*)?([\d\.]+) stars?', user_thought, re.IGNORECASE)
                     if rating_match:
                         try:
                             min_rating = float(rating_match.group(1))
-                            print(f"Parsed minimum rating from user input: {min_rating}")
                         except ValueError:
                             pass
-
                     reviews_match = re.search(r'(\d+) reviews?', user_thought, re.IGNORECASE)
                     if reviews_match:
                         try:
                             min_reviews = int(reviews_match.group(1))
-                            print(f"Parsed minimum reviews from user input: {min_reviews}")
                         except ValueError:
                             pass
 
+                    # Parse food and priority keywords
                     all_food_keywords = ["italian", "chinese", "korean", "indian", "japanese", "thai", "mexican",
                                          "vietnamese", "french", "american", "british", "turkish", "greek", "spanish",
                                          "vegetarian", "vegan", "halal", "pizza", "burger", "sushi", "curry", "noodles",
@@ -209,44 +242,48 @@ def index():
                     parsed_food_types = [ft for ft in all_food_keywords if ft in user_thought_lower]
                     parsed_priority_keywords = [pk for pk in all_priority_keywords if pk in user_thought_lower]
 
-                    print(f"Parsed food types from user input: {parsed_food_types}")
-                    print(f"Parsed priority keywords from user input: {parsed_priority_keywords}")
-
-                def match_tags(restaurant_tags, parsed_tags):
-                    if not parsed_tags:
-                        return True
-                    if not isinstance(restaurant_tags, list):
-                        return False
-                    return any(p_tag.lower() in [r_tag.lower() for r_tag in restaurant_tags] for p_tag in parsed_tags)
-
-                if parsed_food_types:
-                    filtered_df = filtered_df[
-                        filtered_df['food_type_tags'].apply(lambda x: match_tags(x, parsed_food_types))
+                # 2. Filter by minimum rating and reviews (using original avg_rating)
+                filtered_df = temp_df[
+                    (temp_df['avg_rating'] >= min_rating) &
+                    (temp_df['total_ratings'] >= min_reviews)
                     ].copy()
 
-                if parsed_priority_keywords:
-                    filtered_df = filtered_df[
-                        filtered_df['priority_tags'].apply(lambda x: match_tags(x, parsed_priority_keywords))
-                    ].copy()
-
-                if min_rating != DEFAULT_MIN_RATING:
-                    final_rating_filter = (filtered_df['avg_rating'] >= min_rating)
-                    print(f"Filtering by actual average rating >= {min_rating} due to explicit user request.")
+                if filtered_df.empty:
+                    error_message = f"No restaurants found with at least {min_rating} stars and {min_reviews} reviews."
                 else:
-                    final_rating_filter = (filtered_df['weighted_rating'] >= min_rating)
-                    print(f"Filtering by weighted rating >= {min_rating} as no explicit rating was requested.")
+                    # 3. Calculate final weighted rating based on user preferences
+                    all_parsed_keywords = parsed_food_types + parsed_priority_keywords
+                    recommendations_df = calculate_final_rating(filtered_df, keywords=all_parsed_keywords)
 
-                recommendations_df = filtered_df[
-                    final_rating_filter &
-                    (filtered_df['total_ratings'] >= min_reviews)
-                ].copy()
+                    # 4. Filter by food/priority tags
+                    def match_tags(restaurant_tags, parsed_tags):
+                        if not parsed_tags:
+                            return True
+                        if not isinstance(restaurant_tags, list):
+                            return False
+                        return any(
+                            p_tag.lower() in [r_tag.lower() for r_tag in restaurant_tags] for p_tag in parsed_tags)
 
-                recommendations_df = recommendations_df.sort_values(
-                    by=['weighted_rating', 'total_ratings'], ascending=[False, False]
-                ).head(10)
+                    if parsed_food_types:
+                        recommendations_df = recommendations_df[
+                            recommendations_df['food_type_tags'].apply(lambda x: match_tags(x, parsed_food_types))
+                        ].copy()
+                    if parsed_priority_keywords:
+                        recommendations_df = recommendations_df[
+                            recommendations_df['priority_tags'].apply(lambda x: match_tags(x, parsed_priority_keywords))
+                        ].copy()
 
-        elif user_lat is None or user_lng is None:
-            pass
+                    if recommendations_df.empty:
+                        error_message = "No restaurants found matching your specific preferences."
+
+                    # 5. Final sort and take top 10
+                    if error_message is None:
+                        recommendations_df = recommendations_df.sort_values(
+                            by=['weighted_rating', 'total_ratings'], ascending=[False, False]
+                        ).head(10)
+
+        else:
+            error_message = "Restaurant data is not available. Please try again later."
 
     recommendations_list = []
     if recommendations_df is not None and not recommendations_df.empty:
@@ -257,7 +294,7 @@ def index():
         elif 'distance_m' not in recommendations_df.columns:
             recommendations_df['distance_m'] = None
 
-        recommendations_list = recommendations_df.to_dict('records')
+        recommendations_list = recommendations_df.replace({np.nan: None}).to_dict('records')
 
     return render_template('home.html',
                            recommendations=recommendations_list,
@@ -278,6 +315,8 @@ def get_nearby_restaurants():
         lat = request.args.get('lat', type=float)
         lng = request.args.get('lng', type=float)
         radius = request.args.get('radius', type=int)
+        keywords_str = request.args.get('keywords', '')
+        keywords = keywords_str.split(',') if keywords_str else None
 
         if lat is None or lng is None or radius is None:
             return jsonify({"error": "Latitude, longitude, or radius missing."}), 400
@@ -285,17 +324,10 @@ def get_nearby_restaurants():
         if restaurant_data_df.empty:
             return jsonify({"error": "Restaurant data not loaded. Please try again later."}), 500
 
-        C = restaurant_data_df['avg_rating'].mean()
-        M = M_BAYESIAN_AVG_CONFIDENCE
+        # 1. Distance filter (pre-filter)
+        nearby_df = filter_restaurants_by_distance(restaurant_data_df, lat, lng, radius)
 
-        temp_df = restaurant_data_df.copy()
-        temp_df['weighted_rating'] = temp_df.apply(
-            lambda x: ((x['total_ratings'] / (x['total_ratings'] + M)) * x['avg_rating']) + \
-                      ((M / (x['total_ratings'] + M)) * C), axis=1
-        )
-
-        nearby_df = filter_restaurants_by_distance(temp_df, lat, lng, radius)
-
+        # 2. Minimum ratings threshold filter
         nearby_df = nearby_df[nearby_df['total_ratings'] >= MIN_RATINGS_THRESHOLD].copy()
 
         if nearby_df.empty:
@@ -303,10 +335,14 @@ def get_nearby_restaurants():
             avg_data_lng = restaurant_data_df['longitude'].mean()
             if calculate_distance(lat, lng, avg_data_lat, avg_data_lng) > 50000:
                 return jsonify(
-                    {"error": "Your current location might be outside our Birmingham data coverage area. Please try a location closer to Birmingham city center."}), 400
+                    {"error": "Your current location might be outside our Birmingham data coverage area."}), 400
             else:
                 return jsonify([]), 200
 
+        # 3. Calculate final rating with bonuses
+        nearby_df = calculate_final_rating(nearby_df, keywords=keywords)
+
+        # 4. Final sort and take top 5
         top_nearby_df = nearby_df.sort_values(
             by=['weighted_rating', 'total_ratings'], ascending=[False, False]
         ).head(5)
