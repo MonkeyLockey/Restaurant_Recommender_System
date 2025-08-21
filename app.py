@@ -215,13 +215,13 @@ def index():
 
                 if user_thought:
                     # Parse rating and reviews from user input
-                    rating_match = re.search(r'(?:over\s*)?([\d\.]+) stars?', user_thought, re.IGNORECASE)
+                    rating_match = re.search(r'(\d+(\.\d+)?)(?:\s*stars?|\s*\*)', user_thought, re.IGNORECASE)
                     if rating_match:
                         try:
                             min_rating = float(rating_match.group(1))
                         except ValueError:
                             pass
-                    reviews_match = re.search(r'(\d+) reviews?', user_thought, re.IGNORECASE)
+                    reviews_match = re.search(r'(\d+)\s*reviews?', user_thought, re.IGNORECASE)
                     if reviews_match:
                         try:
                             min_reviews = int(reviews_match.group(1))
