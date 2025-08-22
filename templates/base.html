@@ -19,8 +19,8 @@
 
   <!-- External JS (deferred loading) -->
   <!-- These scripts will be loaded AFTER the DOM is parsed, but before DOMContentLoaded fires. -->
-  <script src="{{ url_for('static', filename='js/maps-init.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/nearby.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/maps-init.js') }}?v=20250822-1" defer></script>
+  <script src="{{ url_for('static', filename='js/nearby.js') }}?v=20250822-1" defer></script>
 
   {% block head_extras %}{% endblock %}
 </head>
