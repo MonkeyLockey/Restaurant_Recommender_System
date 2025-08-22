@@ -38,7 +38,8 @@ window.fetchNearbyRestaurants = function(lat, lng, radius = 1000) {
                     const avgRatingFormatted = typeof r.avg_rating === 'number' ? r.avg_rating.toFixed(1) : 'N/A';
 
                     restaurantCard.innerHTML = `
-                        <a href="https://www.google.com/maps/place/?q=place_id:${r.place_id}" target="_blank" class="block">
+                        <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.restaurant_name)}&query_place_id=${r.place_id}"
+                            target="_blank" rel="noopener noreferrer">
                             <h3 class="text-lg font-semibold text-indigo-600 hover:underline">${r.restaurant_name}</h3>
                         </a>
                         <p class="text-sm text-gray-500 mt-1">${r.address}</p>
