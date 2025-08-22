@@ -34,10 +34,6 @@ SENTIMENT_WEIGHT_FACTOR = 0.2
 def load_processed_data(filename):
     """
     Loads processed restaurant data from a CSV file.
-    Args:
-        filename (str): Path to the processed CSV file.
-    Returns:
-        pd.DataFrame: Loaded data.
     """
     if not os.path.exists(filename):
         print(f"Error: Processed data file not found at: {filename}")
@@ -103,23 +99,12 @@ def filter_restaurants_by_distance(df, user_lat, user_lng, radius_meters):
     return df_in_radius
 
 
-# New unified rating calculation function
 def calculate_final_rating(df, keywords=None):
-    """
-    Calculates the final weighted rating for restaurants based on Bayesian average,
-    sentiment score, and keyword bonus.
-    Args:
-        df (pd.DataFrame): DataFrame with restaurant data.
-        keywords (list): List of user-parsed keywords for bonus points.
-    Returns:
-        pd.DataFrame: DataFrame with the 'final_weighted_rating' column.
-    """
     if df.empty:
         return df
 
     df_temp = df.copy()
 
-    # 1. Calculate Bayesian Average
     C = df_temp['avg_rating'].mean()
     M = M_BAYESIAN_AVG_CONFIDENCE
     df_temp['weighted_rating'] = df_temp.apply(
@@ -127,16 +112,13 @@ def calculate_final_rating(df, keywords=None):
                   ((M / (x['total_ratings'] + M)) * C), axis=1
     )
 
-    # 2. Add sentiment score bonus
     if 'avg_sentiment_compound' in df_temp.columns:
         df_temp['weighted_rating'] += (SENTIMENT_WEIGHT_FACTOR * df_temp['avg_sentiment_compound'])
 
-    # 3. Add tag bonus based on keywords
     if keywords:
         def tag_bonus(row):
             score = 0.0
             for kw in keywords:
-                # Ensure the column exists and is a list
                 if isinstance(row.get('all_keywords_for_recommendation'), list):
                     if any(re.search(re.escape(kw), str(tag), re.IGNORECASE) for tag in
                            row['all_keywords_for_recommendation']):
@@ -159,7 +141,6 @@ def index():
     user_radius_input = ''
     error_message = None
     selected_location_source = 'current_location'
-
     user_lat, user_lng = None, None
 
     if request.method == 'POST':
@@ -172,7 +153,6 @@ def index():
             user_lat = float(request.form.get('user_lat')) if request.form.get('user_lat') else None
             user_lng = float(request.form.get('user_lng')) if request.form.get('user_lng') else None
         except (ValueError, TypeError):
-            print("Invalid coordinates received from form.")
             user_lat, user_lng = None, None
 
         if selected_location_source == 'manual_input' and user_location_input and (
@@ -187,25 +167,28 @@ def index():
             except Exception as e:
                 error_message = f"Geocoding error: {e}"
 
-        if not restaurant_data_df.empty:
-            # 1. Distance filter (pre-filter)
+        if not user_thought.strip():
+            error_message = "Please enter your preferences in the 'Your preferences' field."
+        elif user_lat is None or user_lng is None:
+            error_message = "Could not determine your location. Please allow location access or enter a valid location manually."
+        elif restaurant_data_df.empty:
+            error_message = "Restaurant data is not available. Please try again later."
+
+        if error_message is None:
+            temp_df = restaurant_data_df.copy()
             if user_radius_input:
                 try:
                     radius_meters = int(user_radius_input)
-                    if radius_meters > 0 and user_lat is not None and user_lng is not None:
-                        temp_df = filter_restaurants_by_distance(restaurant_data_df, user_lat, user_lng, radius_meters)
+                    if radius_meters > 0:
+                        temp_df = filter_restaurants_by_distance(temp_df, user_lat, user_lng, radius_meters)
                         if temp_df.empty:
                             error_message = f"No restaurants found within your selected {radius_meters}m radius."
-                    elif radius_meters <= 0:
+                    else:
                         error_message = "Search radius must be a positive number."
                         temp_df = pd.DataFrame()
-                    else:
-                        temp_df = restaurant_data_df.copy()
                 except ValueError:
                     error_message = f"Invalid search radius '{user_radius_input}'. Please enter a valid number."
                     temp_df = pd.DataFrame()
-            else:
-                temp_df = restaurant_data_df.copy()
 
             if error_message is None:
                 parsed_food_types = []
@@ -214,7 +197,6 @@ def index():
                 min_reviews = DEFAULT_MIN_REVIEWS
 
                 if user_thought:
-                    # Parse rating and reviews from user input
                     rating_match = re.search(r'(\d+(\.\d+)?)(?:\s*stars?|\s*\*)', user_thought, re.IGNORECASE)
                     if rating_match:
                         try:
@@ -228,7 +210,6 @@ def index():
                         except ValueError:
                             pass
 
-                    # Parse food and priority keywords
                     all_food_keywords = ["italian", "chinese", "korean", "indian", "japanese", "thai", "mexican",
                                          "vietnamese", "french", "american", "british", "turkish", "greek", "spanish",
                                          "vegetarian", "vegan", "halal", "pizza", "burger", "sushi", "curry", "noodles",
@@ -242,27 +223,23 @@ def index():
                     parsed_food_types = [ft for ft in all_food_keywords if ft in user_thought_lower]
                     parsed_priority_keywords = [pk for pk in all_priority_keywords if pk in user_thought_lower]
 
-                # 2. Filter by minimum rating and reviews (using original avg_rating)
                 filtered_df = temp_df[
                     (temp_df['avg_rating'] >= min_rating) &
                     (temp_df['total_ratings'] >= min_reviews)
-                    ].copy()
+                ].copy()
 
                 if filtered_df.empty:
                     error_message = f"No restaurants found with at least {min_rating} stars and {min_reviews} reviews."
                 else:
-                    # 3. Calculate final weighted rating based on user preferences
                     all_parsed_keywords = parsed_food_types + parsed_priority_keywords
                     recommendations_df = calculate_final_rating(filtered_df, keywords=all_parsed_keywords)
 
-                    # 4. Filter by food/priority tags
                     def match_tags(restaurant_tags, parsed_tags):
                         if not parsed_tags:
                             return True
                         if not isinstance(restaurant_tags, list):
                             return False
-                        return any(
-                            p_tag.lower() in [r_tag.lower() for r_tag in restaurant_tags] for p_tag in parsed_tags)
+                        return any(p_tag.lower() in [r_tag.lower() for r_tag in restaurant_tags] for p_tag in parsed_tags)
 
                     if parsed_food_types:
                         recommendations_df = recommendations_df[
@@ -276,14 +253,10 @@ def index():
                     if recommendations_df.empty:
                         error_message = "No restaurants found matching your specific preferences."
 
-                    # 5. Final sort and take top 10
                     if error_message is None:
                         recommendations_df = recommendations_df.sort_values(
                             by=['weighted_rating', 'total_ratings'], ascending=[False, False]
                         ).head(10)
-
-        else:
-            error_message = "Restaurant data is not available. Please try again later."
 
     recommendations_list = []
     if recommendations_df is not None and not recommendations_df.empty:
@@ -324,10 +297,7 @@ def get_nearby_restaurants():
         if restaurant_data_df.empty:
             return jsonify({"error": "Restaurant data not loaded. Please try again later."}), 500
 
-        # 1. Distance filter (pre-filter)
         nearby_df = filter_restaurants_by_distance(restaurant_data_df, lat, lng, radius)
-
-        # 2. Minimum ratings threshold filter
         nearby_df = nearby_df[nearby_df['total_ratings'] >= MIN_RATINGS_THRESHOLD].copy()
 
         if nearby_df.empty:
@@ -339,10 +309,8 @@ def get_nearby_restaurants():
             else:
                 return jsonify([]), 200
 
-        # 3. Calculate final rating with bonuses
         nearby_df = calculate_final_rating(nearby_df, keywords=keywords)
 
-        # 4. Final sort and take top 5
         top_nearby_df = nearby_df.sort_values(
             by=['weighted_rating', 'total_ratings'], ascending=[False, False]
         ).head(5)
@@ -351,7 +319,6 @@ def get_nearby_restaurants():
         return jsonify(top_nearby_list)
 
     except Exception as e:
-        print(f"An unexpected error occurred in /get_nearby_restaurants: {e}")
         traceback.print_exc()
         return jsonify({"error": f"An unexpected server error occurred: {str(e)}. Please try again later."}), 500
 
@@ -363,5 +330,4 @@ if __name__ == '__main__':
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", 5000))
 
-    # For local testing, use debug=True
     app.run(host=host, port=port, debug=False)
