@@ -2,10 +2,22 @@
 <div class="border-b border-gray-200 pb-4 mb-4 last:border-0 last:pb-0 last:mb-0">
   <div class="flex items-start">
     <h3 class="text-xl font-semibold text-indigo-600 flex-grow">
-      <a href="https://www.google.com/maps/place/?q=place_id:{{ r['place_id'] }}"
-         target="_blank" rel="noopener noreferrer" class="hover:underline">
-        {{ r['restaurant_name'] }}
-      </a>
+      {% if r['place_id'] %}
+        <a href="https://www.google.com/maps/search/?api=1&query={{ r['restaurant_name']|urlencode }}&query_place_id={{ r['place_id']|urlencode }}"
+           target="_blank" rel="noopener noreferrer" class="hover:underline">
+          {{ r['restaurant_name'] }}
+        </a>
+      {% elif r['lat'] and r['lng'] %}
+        <a href="https://www.google.com/maps/search/?api=1&query={{ r['lat'] }},{{ r['lng'] }}"
+           target="_blank" rel="noopener noreferrer" class="hover:underline">
+          {{ r['restaurant_name'] }}
+        </a>
+      {% else %}
+        <a href="https://www.google.com/maps/search/?api=1&query={{ r['restaurant_name']|urlencode }}"
+           target="_blank" rel="noopener noreferrer" class="hover:underline">
+          {{ r['restaurant_name'] }}
+        </a>
+      {% endif %}
     </h3>
     <p class="flex-shrink-0 text-gray-900 font-bold ml-4">
       ⭐ {{ r['avg_rating']|round(1) }} <span class="text-gray-500 font-normal">({{ r['total_ratings']|int }})</span>

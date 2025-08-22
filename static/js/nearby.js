@@ -37,16 +37,22 @@ window.fetchNearbyRestaurants = function(lat, lng, radius = 1000) {
                     restaurantCard.className = "border-b border-gray-200 pb-3 mb-3 last:border-0 last:pb-0 last:mb-0";
                     const avgRatingFormatted = typeof r.avg_rating === 'number' ? r.avg_rating.toFixed(1) : 'N/A';
 
+                    function mapsUrl(r) {
+                      if (r.place_id) {
+                        return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.restaurant_name || '')}&query_place_id=${encodeURIComponent(r.place_id)}`;
+                      }
+                      if (typeof r.lat === 'number' && typeof r.lng === 'number') {
+                        return `https://www.google.com/maps/search/?api=1&query=${r.lat},${r.lng}`;
+                      }
+                      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.restaurant_name || '')}`;
+                    }
                     restaurantCard.innerHTML = `
-                        <a href="https://www.google.com/maps/place/?q=place_id:${r.place_id}"
-                           target="_blank" rel="noopener noreferrer">
-                           <h3 class="text-lg font-semibold text-indigo-600 hover:underline">${r.restaurant_name}</h3>
-                        </a>
-                        <p class="text-sm text-gray-500 mt-1">${r.address}</p>
-                        <p class="text-sm text-gray-900 font-bold mt-1">
-                            ⭐ ${avgRatingFormatted} <span class="text-gray-500 font-normal">(${r.total_ratings})</span>
-                        </p>
-                        <p class="text-xs text-gray-400 mt-1">📏 Approx. ${Math.round(r.distance_m)} meters away</p>
+                      <a href="${mapsUrl(r)}" target="_blank" rel="noopener noreferrer">
+                        <h3 class="text-lg font-semibold text-indigo-600 hover:underline">${r.restaurant_name}</h3>
+                      </a>
+                      <p class="text-sm text-gray-500 mt-1">${r.address || "No address available"}</p>
+                      <p class="text-sm text-gray-900 font-bold mt-1">⭐ ${Number(r.avg_rating).toFixed(1)} <span class="text-gray-500">(${r.total_ratings})</span></p>
+                      <p class="text-sm text-gray-400">📏 ${Math.round(r.distance_m)} m away</p>
                     `;
                     container.appendChild(restaurantCard);
                 });
